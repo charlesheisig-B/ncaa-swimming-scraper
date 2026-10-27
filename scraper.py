@@ -3,9 +3,6 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
-from statistics import median
-from time import perf_counter
-from typing import Callable
 
 import requests
 
@@ -29,6 +26,14 @@ EVENT_PAGES = [
         "https://swimmeetresults.tech/NCAA-Division-I-Men-2026/260325F010.htm",
     ),
 ]
+
+EVENT_LABELS = {
+    "100 Butterfly": "100 Fly",
+    "400 IM": "400 IM",
+    "200 Freestyle": "200 Free",
+    "100 Breaststroke": "100 Breast",
+    "100 Backstroke": "100 Back",
+}
 
 
 class _PreTextParser(HTMLParser):
@@ -92,15 +97,6 @@ def parse_results(html: str, event: str) -> list[dict[str, str]]:
     return results
 
 
-def scrape_sequential(event_pages: list[tuple[str, str]]) -> list[dict[str, str]]:
-    """Fetch and parse event pages one at a time."""
-    return [
-        result
-        for event, url in event_pages
-        for result in parse_results(fetch_results(url), event)
-    ]
-
-
 def scrape_concurrent(event_pages: list[tuple[str, str]]) -> list[dict[str, str]]:
     """Fetch and parse event pages using up to four worker threads."""
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -123,100 +119,32 @@ def _format_name(name: str) -> str:
 def transform_results_functional(
     results: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """Filter, format, and sort results using functional transformations."""
-    valid_results = filter(
-        lambda result: all(result.get(field, "").strip() for field in ("event", "name", "time")),
+    """Filter incomplete records and format names with functional tools."""
+    complete_results = filter(
+        lambda result: all(
+            result.get(field, "").strip() for field in ("event", "name", "time")
+        ),
         results,
     )
-    formatted_results = map(
-        lambda result: {**result, "name": _format_name(result["name"])},
-        valid_results,
+    return list(
+        map(
+            lambda result: {**result, "name": _format_name(result["name"])},
+            complete_results,
+        )
     )
-    return sorted(formatted_results, key=lambda result: (result["event"], result["name"]))
-
-
-def transform_results_imperative(
-    results: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    """Perform the same filtering, formatting, and sorting with loops."""
-    formatted_results = []
-    for result in results:
-        if not all(result.get(field, "").strip() for field in ("event", "name", "time")):
-            continue
-        formatted_results.append({**result, "name": _format_name(result["name"])})
-
-    formatted_results.sort(key=lambda result: (result["event"], result["name"]))
-    return formatted_results
-
-
-def benchmark_scraper(
-    scraper: Callable[[list[tuple[str, str]]], list[dict[str, str]]],
-    event_pages: list[tuple[str, str]],
-    repetitions: int = 3,
-) -> tuple[float, list[dict[str, str]]]:
-    """Return a scraper's median runtime and results from its final trial."""
-    runtimes = []
-    results = []
-    for _ in range(repetitions):
-        start_time = perf_counter()
-        results = scraper(event_pages)
-        runtimes.append(perf_counter() - start_time)
-    return median(runtimes), results
-
-
-def benchmark_transformation(
-    transform: Callable[[list[dict[str, str]]], list[dict[str, str]]],
-    results: list[dict[str, str]],
-    repetitions: int = 3,
-) -> tuple[float, list[dict[str, str]]]:
-    """Return a transformation's median runtime on already-fetched data."""
-    runtimes = []
-    transformed_results = []
-    for _ in range(repetitions):
-        start_time = perf_counter()
-        transformed_results = transform(results)
-        runtimes.append(perf_counter() - start_time)
-    return median(runtimes), transformed_results
 
 
 def main() -> None:
-    sequential_time, sequential_results = benchmark_scraper(
-        scrape_sequential, EVENT_PAGES
-    )
-    concurrent_time, concurrent_results = benchmark_scraper(
-        scrape_concurrent, EVENT_PAGES
-    )
-    if sequential_results != concurrent_results:
-        raise RuntimeError("Sequential and concurrent results do not match.")
-
-    functional_time, functional_results = benchmark_transformation(
-        transform_results_functional, sequential_results
-    )
-    imperative_time, imperative_results = benchmark_transformation(
-        transform_results_imperative, sequential_results
-    )
-    if functional_results != imperative_results:
-        raise RuntimeError("Functional and imperative results do not match.")
-
+    results = transform_results_functional(scrape_concurrent(EVENT_PAGES))
     print("2026 NCAA Men's Swimming Championships")
     print(f"\nScraped Events: {len(EVENT_PAGES)}")
-    print("\nSample Results:")
-    for result in functional_results[:5]:
-        print(
-            f"\nEvent: {result['event']}\n"
-            f"Swimmer: {result['name']}\n"
-            f"Time: {result['time']}"
-        )
-
-    print("\nScraping Performance (median of 3 runs):")
-    print(f"Sequential: {sequential_time:.3f} seconds")
-    print(f"Concurrent: {concurrent_time:.3f} seconds")
-    print(f"Speedup: {sequential_time / concurrent_time:.2f}x")
-
-    print("\nTransformation Performance (median of 3 runs):")
-    print(f"Functional: {functional_time:.6f} seconds")
-    print(f"Imperative: {imperative_time:.6f} seconds")
-    print("Both transformations produced equivalent results.")
+    print(f"Results: {len(results)}")
+    print("\nScraped Results:")
+    for event, _ in EVENT_PAGES:
+        event_results = filter(lambda result: result["event"] == event, results)
+        print(f"\n{EVENT_LABELS[event]}:")
+        for place, result in enumerate(event_results, start=1):
+            print(f"   {place}) {result['name']}, {result['time']}")
 
 
 if __name__ == "__main__":
